@@ -1,1 +1,1 @@
-# bhgc_proj
+# gc_proj
