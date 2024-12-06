@@ -1,0 +1,126 @@
+#lang racket
+
+
+(require "prims.rkt")
+(provide ssa-convert ssa?)
+
+
+; The output of this pass should meet this specification:
+(define (ssa? exp)
+  (call/cc
+   (lambda (escape)
+     ; passes a set of in-scope variables
+     (define ((recur-with vars) exp)
+       (define recur (recur-with vars))
+       (match exp
+	 [`(let ([,(? symbol? x) ,(and (? (not/c symbol?)) (? recur))]) ,body)
+	  ; no shadowing in the output:
+	  (when (set-member? vars x) (escape #f))
+	  ((recur-with (set-add vars x)) body)]
+	 [`(if ,(? recur) ,(? recur) ,(? recur)) #t]
+	 [`(call/cc ,(? recur)) #t]
+	 
+	 [`(,(? prim?) ,(? recur) ...) #t]
+	 [`(apply ,(? prim?) ,(? recur)) #t]
+	 
+	 [`',(or (? boolean?) (? number?) '()) #t]
+	 
+	 [`(lambda (,(? symbol? x)) ,body)
+	  ; no shadowing in the output:
+	  (when (set-member? vars x) (escape #f))
+	  ((recur-with (set-add vars x)) body)]
+	 [`(,(? recur) ,(? recur)) #t]
+	 [(and (? symbol? x) (? (not/c prim?)))
+	  ; only references defined variables:
+	  (set-member? vars x)]
+	 
+	 [_ #f]))
+     ((recur-with (set)) exp))))
+
+(define (alphatize exp [env (hash)])
+  (define recur (lambda (e) (alphatize e env)))
+  (match exp
+  [`(call/cc ,e0)
+   `(call/cc ,(recur e0))]
+  [`(lambda (,x) ,e0)
+   (define x+ (gensym x))
+   `(lambda x+ ,(alphatize e0 (hash-set env x x+)))]
+  [(? symbol? x) (not (prim? x))
+   (hash-ref env x (lambda () (error (format "Var not found: ~a" x))))]))
+
+; desugared? -> ssa?
+;; (define (ssa-convert exp)
+;; 
+;;   ; Convert to (Scheme's version of) static single assignment (SSA)
+;; 
+;;   ; Must emit explicitly "boxed" code that conservatively uses vector-set! to implement set!,
+;;   ;   but does not "box" every variable indiscriminately, never shadows (uses only unique names),
+;;   ;   and optimizes away all let forms that assign one variable to another, e.g., (let ([x y]) ...).
+;;   
+;;   'todo)
+
+(define (gensym-reset!)
+  (set! gensym-counter 0))
+
+(define gensym-counter 0)
+
+(define (gensym* base)
+  (set! gensym-counter (add1 gensym-counter))
+  (string->symbol (format "~a_~a" base gensym-counter)))
+
+; Main ssa-convert function
+(define (ssa-convert exp)
+  (gensym-reset!)
+  (ssa-convert-helper exp (hash)))
+
+(define (ssa-convert-helper exp env)
+  (define (recur e) (ssa-convert-helper e env))
+  (match exp
+    [`(let ([,x ,e]) ,body)
+     (define e-ssa (recur e))
+     (if (symbol? e-ssa)
+         (ssa-convert-helper body (hash-set env x e-ssa))
+         (let ([x-new (gensym* x)])
+           `(let ([,x-new ,e-ssa])
+              ,(ssa-convert-helper body (hash-set env x x-new)))))]
+    
+    [`(if ,cond ,then ,else)
+     `(if ,(recur cond) ,(recur then) ,(recur else))]
+    
+    [`(call/cc ,e)
+     `(call/cc ,(recur e))]
+    
+    [`(lambda (,x) ,body)
+     (let ([x-new (gensym* x)])
+       `(lambda (,x-new)
+          ,(ssa-convert-helper body (hash-set env x x-new))))]
+    
+    [`(,op ,args ...)
+     #:when (prim? op)
+     `(,op ,@(map recur args))]
+    
+    [`(apply ,op ,args)
+     #:when (prim? op)
+     `(apply ,op ,(recur args))]
+    
+    [`(,f ,args ...)
+     `(,(recur f) ,@(map recur args))]
+    
+    [(? symbol? x)
+     (hash-ref env x (lambda () x))]
+    
+    [`(set! ,x ,e)
+     (let ([x-new (gensym* x)]
+           [e-ssa (recur e)])
+       `(let ([,x-new (make-vector 1 ,e-ssa)])
+          (vector-set! ,x-new 0 ,e-ssa)))]
+    
+    [`(begin ,es ...)
+     `(begin ,@(map recur es))]
+    
+    [x x]))
+
+
+
+
+
