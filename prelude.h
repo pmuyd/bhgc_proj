@@ -1,3 +1,6 @@
+#define GC_DEBUG
+#include <gc/gc.h>
+#include <gc/gc_allocator.h>
 
 #include <iostream>
 
@@ -99,7 +102,7 @@ any prim_error()
 
 any prim_cons(any x, any y)
 {
-  any* pa = (any*)malloc(2*sizeof(any));
+  any* pa = (any*)GC_MALLOC(2*sizeof(any));
   pa[0] = x;
   pa[1] = y;
   return TAG((any)pa, 6);
@@ -125,7 +128,7 @@ any prim_null_63(any x)
 any prim_make_45vector(any i, any v)
 {
   int ii = GETINT(i);
-  any* b = (any*)malloc((1+ii)*sizeof(any));
+  any* b = (any*)GC_MALLOC((1+ii)*sizeof(any));
   for (int n = 1; n <= ii; ++n)
     b[n] = v;
   b[0] = TAG(ii, INT_TAG);
@@ -241,6 +244,10 @@ any prim__62(any x, any y)
   if (GETINT(x) > GETINT(y))
     return TRUE;
   else return FALSE;
+}
+
+void force_gc() {
+    GC_gcollect();
 }
 
 

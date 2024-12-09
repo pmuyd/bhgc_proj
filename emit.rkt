@@ -4,7 +4,6 @@
 (require "prims.rkt")
 (provide clo-convert emit-cpp build!)
 
-
 ; cps? -> clo?
 (define (clo-convert exp)
   (define (T exp)
@@ -123,7 +122,7 @@
        (define t (gensym 'cl))
        (string-append
 	(string-append 
-	 (format "  any* ~a = (any*)malloc(~a*sizeof(any));\n" t (add1 (length xs)))
+	 (format "  any* ~a = (any*)GC_MALLOC(~a*sizeof(any));\n" t (add1 (length xs)))
 	 (format "  ~a[0] = (any)(&~a);\n" t pr)
 	 (foldl (lambda (i x acc)
 		  (string-append acc (format "  ~a[~a] = ~a;\n" t i (x->cpp x))))
@@ -170,23 +169,28 @@
     (match proc
       [`(proc (main) ,e0)
        (string-append
-	"int main()\n"
-	"{\n"
-	(e->cpp e0)
-	"return 0;\n"
-	"}\n")]
+        "int main()\n"
+        "{\n"
+        "  GC_INIT();\n"  ; init gc
+        "  GC_find_leak = 1;\n"
+        (e->cpp e0)
+        "  force_gc();\n"
+        "return 0;\n"
+        "}\n")]
       [`(proc (,pr ,env ,arg ,kont) ,e0)
        (string-append
-	(format "void ~a(any ~a, any ~a, any ~a)\n"
-		pr
-		(x->cpp env)
-		(x->cpp arg)
-		(x->cpp kont))
-	"{\n"
+        (format "void ~a(any ~a, any ~a, any ~a)\n"
+                pr
+                (x->cpp env)
+                (x->cpp arg)
+                (x->cpp kont))
+        "{\n"
 	(e->cpp e0)
 	"}\n")]))
+  
   (define procs-main-last
     (sort (set->list procs) > #:key (compose length second)))
+  
   (string-append
    ; forward declare
    (foldl (lambda (proc acc)
@@ -206,8 +210,9 @@
 (define (build! cpp)
   ; spits out the cpp string to out.cpp, including the prelude, and builds it with g++
   (with-output-to-file "out.cpp"
-    (lambda () (display "#include \"prelude.h\"\n\n") (display cpp))
+    (lambda () (display "#include \"prelude.h\"\n\n")
+      (display cpp))
     #:exists 'replace)
-  (system "g++ out.cpp -o bin -g -fmax-errors=2"))
+  (system "g++ out.cpp -o bin -lgc -g -fmax-errors=2 -DGC_PRINT_STATS"))
 
 
